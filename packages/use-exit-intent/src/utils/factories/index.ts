@@ -1,2 +1,6 @@
 export * from './idleEvents'
 export * from './debounce'
+export * from './scrollDetection'
+export * from './edgeSwipeDetection'
+export * from './backButtonDetection'
+export * from './activityDetection'

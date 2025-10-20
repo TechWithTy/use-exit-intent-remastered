@@ -18,6 +18,15 @@ export interface DesktopOptions {
 export interface MobileOptions {
   triggerOnIdle?: boolean
   delayInSecondsToTrigger?: number
+  // New mobile detection strategies
+  triggerOnScrollUp?: boolean
+  scrollThreshold?: number
+  scrollUpThreshold?: number
+  triggerOnEdgeSwipe?: boolean
+  edgeSwipeThreshold?: number
+  triggerOnBackButton?: boolean
+  triggerOnInactivity?: boolean
+  inactivityThreshold?: number
 }
 
 export type InternalExitIntentSettings = Required<

@@ -13,6 +13,10 @@ import {
   removeIdleEvents,
   secondsToMiliseconds,
   processHandlersByDeviceContext,
+  createScrollDetection,
+  createEdgeSwipeDetection,
+  createBackButtonDetection,
+  createActivityDetection,
 } from './utils'
 
 import {
@@ -22,22 +26,24 @@ import {
 } from './types'
 
 export function useExitIntent(props: ExitIntentSettings | void = {}) {
+  const safeProps = props ?? {}
+
   const initialSettings: InternalExitIntentSettings = {
     ...defaultSettings,
 
     cookie: {
       ...defaultSettings.cookie,
-      ...props?.cookie,
+      ...safeProps.cookie,
     },
 
     desktop: {
       ...defaultSettings.desktop,
-      ...props?.desktop,
+      ...safeProps.desktop,
     },
 
     mobile: {
       ...defaultSettings.mobile,
-      ...props?.mobile,
+      ...safeProps.mobile,
     },
   }
 
@@ -51,9 +57,21 @@ export function useExitIntent(props: ExitIntentSettings | void = {}) {
   const shouldNotTrigger = useRef<boolean>(false)
 
   const { mobile, desktop, cookie } = settings
-  const willBeTriggered = !(isUnsubscribed || isTriggered)
 
-  shouldNotTrigger.current = isUnsubscribed || isTriggered
+  // Helper function to read current cookie state in real-time
+  const readIsUnsubscribed = useCallback(() => {
+    if (typeof window === 'undefined') {
+      return false
+    }
+
+    return Cookies.get(cookie.key) === 'true'
+  }, [cookie.key])
+
+  const isCookieUnsubscribed = readIsUnsubscribed()
+
+  const willBeTriggered = !isCookieUnsubscribed && !isTriggered
+
+  shouldNotTrigger.current = isCookieUnsubscribed || isTriggered
 
   const handleExitIntent = useCallback(() => {
     if (shouldNotTrigger.current) return
@@ -71,7 +89,7 @@ export function useExitIntent(props: ExitIntentSettings | void = {}) {
         return isDefault || handler.context?.includes(contexts.onTrigger)
       })
       .forEach(processHandlersByDeviceContext)
-  }, [])
+  }, [handlers, processHandlersByDeviceContext])
 
   const unsubscribe = useCallback(() => {
     Cookies.set(cookie.key, 'true', {
@@ -84,7 +102,7 @@ export function useExitIntent(props: ExitIntentSettings | void = {}) {
       .forEach(processHandlersByDeviceContext)
 
     setIsUnsubscribed(true)
-  }, [cookie?.key])
+  }, [cookie?.key, handlers, processHandlersByDeviceContext])
 
   const resetState = useCallback(() => {
     Cookies.remove(cookie?.key, { sameSite: 'Strict' })
@@ -118,38 +136,37 @@ export function useExitIntent(props: ExitIntentSettings | void = {}) {
     handlers.push(_handler)
   }, [])
 
-  const updateSettings = useCallback(
-    (settings: ExitIntentSettings = defaultSettings) => {
-      const newSettings = settings as InternalExitIntentSettings
+  const updateSettings = useCallback((newSettings: ExitIntentSettings = {}) => {
+    resetState()
 
-      resetState()
+    setSettings((prevSettings) => ({
+      ...(prevSettings || {}),
+      ...(newSettings || {}),
 
-      setSettings((prevSettings) => ({
-        ...(prevSettings || {}),
-        ...(newSettings || {}),
+      cookie: {
+        ...(prevSettings?.cookie || {}),
+        ...(newSettings?.cookie || {}),
+      },
 
-        cookie: {
-          ...(prevSettings?.cookie || {}),
-          ...(newSettings?.cookie || {}),
-        },
+      desktop: {
+        ...(prevSettings?.desktop || {}),
+        ...(newSettings?.desktop || {}),
+      },
 
-        desktop: {
-          ...(prevSettings?.desktop || {}),
-          ...(newSettings?.desktop || {}),
-        },
-
-        mobile: {
-          ...(prevSettings?.mobile || {}),
-          ...(newSettings?.mobile || {}),
-        },
-      }))
-    },
-    [settings]
-  )
+      mobile: {
+        ...(prevSettings?.mobile || {}),
+        ...(newSettings?.mobile || {}),
+      },
+    }))
+  }, [])
 
   useEffect(() => {
-    setIsUnsubscribed(Cookies.get(cookie.key) === 'true')
-  }, [])
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    setIsUnsubscribed(isCookieUnsubscribed)
+  }, [isCookieUnsubscribed])
 
   useEffect(() => {
     if (isMobile()) {
@@ -158,18 +175,59 @@ export function useExitIntent(props: ExitIntentSettings | void = {}) {
         secondsToMiliseconds(mobile?.delayInSecondsToTrigger!)
       )
 
-      if (shouldNotTrigger.current) {
-        removeIdleEvents(execute)
-        return
+      const cleanups: Array<() => void> = []
+      const trigger = () => {
+        if (shouldNotTrigger.current) return
+        execute()
       }
 
-      if (isMobile() && mobile?.triggerOnIdle) {
-        createIdleEvents(execute)
+      cleanups.push(() => removeIdleEvents(trigger))
+
+      if (!shouldNotTrigger.current) {
+        if (mobile?.triggerOnIdle) {
+          createIdleEvents(trigger)
+        }
+
+        if (mobile?.triggerOnScrollUp) {
+          const { removeScrollDetection } = createScrollDetection({
+            scrollThreshold: mobile?.scrollThreshold,
+            scrollUpThreshold: mobile?.scrollUpThreshold,
+            callback: trigger,
+          })
+
+          cleanups.push(removeScrollDetection)
+        }
+
+        if (mobile?.triggerOnEdgeSwipe) {
+          const { removeEdgeSwipeDetection } = createEdgeSwipeDetection({
+            edgeSwipeThreshold: mobile?.edgeSwipeThreshold,
+            callback: trigger,
+          })
+
+          cleanups.push(removeEdgeSwipeDetection)
+        }
+
+        if (mobile?.triggerOnBackButton) {
+          const { removeBackButtonDetection } = createBackButtonDetection({
+            callback: trigger,
+          })
+
+          cleanups.push(removeBackButtonDetection)
+        }
+
+        if (mobile?.triggerOnInactivity) {
+          const { removeActivityDetection } = createActivityDetection({
+            inactivityThreshold: mobile?.inactivityThreshold,
+            callback: trigger,
+          })
+
+          cleanups.push(removeActivityDetection)
+        }
       }
 
       return () => {
         abort()
-        removeIdleEvents(execute)
+        cleanups.forEach((cleanup) => cleanup())
       }
     }
 
@@ -197,10 +255,13 @@ export function useExitIntent(props: ExitIntentSettings | void = {}) {
       }
 
       if (desktop?.useBeforeUnload) {
-        window.onbeforeunload = () => {
+        window.onbeforeunload = (event: BeforeUnloadEvent) => {
           if (shouldNotTrigger.current) return
 
           handleExitIntent()
+
+          // Prevent default browser behavior (page refresh on reload button)
+          event.preventDefault()
 
           return ''
         }

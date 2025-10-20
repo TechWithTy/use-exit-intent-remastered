@@ -1,12 +1,12 @@
 {
-  "extends": "@daltonmenezes/ts-config/base.json",
+  "extends": "../../packages/ts-config/base.json",
   "include": [
-    "src",
+    "src"
   ],
   "compilerOptions": {
     "declaration": true,
     "declarationDir": "dist/esm",
     "emitDeclarationOnly": true,
-    "outDir": "dist/esm",
+    "outDir": "dist/esm"
   }
 }
